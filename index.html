@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="舉起手機，看看你面前是哪片星空。以觀測位置、時間和手機朝向計算當地的亮星與星座。">
+<meta name="theme-color" content="#090c17">
+<title>P147 星空羅盤｜Sky Compass</title>
+<link rel="stylesheet" href="./style.css">
+<script type="module" src="./app.mjs"></script>
+</head>
+<body>
+<main>
+<header><div><h1>星空羅盤</h1><p>Sky Compass</p></div><span>P147 · V0.1</span></header>
+<section aria-label="星圖">
+<div class="toolbar">
+<button id="manual" type="button" aria-pressed="true">手動星圖</button>
+<button id="sensor" type="button" aria-pressed="false">手機指向</button>
+<button id="locate" type="button">使用我的位置</button>
+</div>
+<div class="sky">
+<canvas id="chart" tabindex="0" aria-label="互動星圖。手動模式可用方向鍵移動，用加減鍵縮放。"></canvas>
+<div class="overlay"><span id="bearing"></span><span id="zoom-label"></span></div>
+</div>
+<div class="readout">
+<div><strong id="target">載入星表中…</strong><div id="status" role="status">拖曳星圖移動，點選亮星或星座名稱查看。</div></div>
+<div class="zoom"><button id="out" type="button" aria-label="縮小">−</button><button id="in" type="button" aria-label="放大">＋</button></div>
+</div>
+</section>
+<div class="settings">
+<form id="site">
+<h2>觀測地點</h2>
+<label>城市<select id="city"></select></label>
+<div class="coords">
+<label>緯度 <input id="lat" type="number" min="-90" max="90" step="any" required></label>
+<label>經度 <input id="lon" type="number" min="-180" max="180" step="any" required></label>
+</div>
+<button type="submit">套用座標</button>
+</form>
+<div class="options">
+<h2>星圖設定</h2>
+<label class="check"><input type="checkbox" id="lines" checked> 顯示星座連線</label>
+<label>方位校準 <output id="offset-label" for="offset">0°</output>
+<input id="offset" type="range" min="-180" max="180" step="1" value="0"></label>
+<button id="reset" type="button">重設校準</button>
+<p id="observer"></p>
+</div>
+</div>
+<footer>慈濟大學 經營管理學系 · 智慧商情研究室 · <a href="https://tcubmdsbilab.github.io/P101/">好玩實驗室</a> · Web Version V0.1</footer>
+</main>
+</body>
+</html>
