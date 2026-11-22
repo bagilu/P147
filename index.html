@@ -11,20 +11,32 @@
 </head>
 <body>
 <main>
-<header><div><h1>星空羅盤</h1><p>Sky Compass</p></div><span>P147 · V0.1</span></header>
+<header><div><h1>星空羅盤</h1><p>Sky Compass</p></div><span>P147 · V0.2</span></header>
 <section aria-label="星圖">
 <div class="toolbar">
 <button id="manual" type="button" aria-pressed="true">手動星圖</button>
 <button id="sensor" type="button" aria-pressed="false">手機指向</button>
+<button id="camera" type="button" aria-pressed="false">相機觀星</button>
 <button id="locate" type="button">使用我的位置</button>
 </div>
 <div class="sky">
+<video id="camera-video" hidden muted playsinline aria-hidden="true"></video>
 <canvas id="chart" tabindex="0" aria-label="互動星圖。手動模式可用方向鍵移動，用加減鍵縮放。"></canvas>
 <div class="overlay"><span id="bearing"></span><span id="zoom-label"></span></div>
 </div>
 <div class="readout">
 <div><strong id="target">載入星表中…</strong><div id="status" role="status">拖曳星圖移動，點選亮星或星座名稱查看。</div></div>
-<div class="zoom"><button id="out" type="button" aria-label="縮小">−</button><button id="in" type="button" aria-label="放大">＋</button></div>
+<div class="zoom" id="chart-zoom"><button id="out" type="button" aria-label="縮小">−</button><button id="in" type="button" aria-label="放大">＋</button></div>
+</div>
+<div id="camera-controls" hidden>
+<p>確認下方觀測地點正確。選擇認得的天體，將它對準畫面中央，再按「以此校正」。</p>
+<div class="camera-actions">
+<label>校正天體<select id="camera-reference"></select></label>
+<button id="camera-align" type="button" disabled>以此校正</button>
+<button id="camera-reset" type="button">重設相機校正</button>
+</div>
+<label>鏡頭視角 <output id="camera-fov-label" for="camera-fov">70°</output>
+<input id="camera-fov" type="range" min="45" max="110" step="1" value="70"></label>
 </div>
 </section>
 <div class="settings">
@@ -46,7 +58,7 @@
 <p id="observer"></p>
 </div>
 </div>
-<footer>慈濟大學 經營管理學系 · 智慧商情研究室 · <a href="https://tcubmdsbilab.github.io/P101/">好玩實驗室</a> · Web Version V0.1</footer>
+<footer>慈濟大學 經營管理學系 · 智慧商情研究室 · <a href="https://tcubmdsbilab.github.io/P101/">好玩實驗室</a> · Web Version V0.2</footer>
 </main>
 </body>
 </html>

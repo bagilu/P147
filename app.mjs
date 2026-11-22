@@ -1,3 +1,4 @@
+import {moonDirection, alignCamera, cameraFocal} from './camera-sky.mjs';
 import {rad,degrees,wrap,clamp,dot,sidereal,horizontal,view,orientation,azimuth} from './sky.mjs';
 
 const byId = id => document.getElementById(id);
@@ -21,10 +22,17 @@ city.add(new Option('自訂座標','custom'));
 let site, sky, catalog, scheduled = false, locationRequest = 0;
 let az = 180, alt = 32, fov = 82, mode = 'manual', sensorView, sensorTimer, sensorRequest = 0;
 let drag, hitTargets = [], selected;
+const video = byId('camera-video');
+const reference = byId('camera-reference');
+const align = byId('camera-align');
+const cameraFov = byId('camera-fov');
+let cameraAlignment, cameraFrame, cameraAbsolute, sensorPriority = -1;
 const status = message => { byId('status').textContent = message; };
 
 function setSite(lat,lon,name,choice='custom') {
+  cameraAlignment = undefined;
   site = {lat,lon};
+  if (mode === 'camera' && cameraFrame) announceCamera();
   city.value = choice;
   byId('lat').value = lat;
   byId('lon').value = lon;
@@ -71,13 +79,17 @@ function schedule() {
 }
 function updateSky() {
   if (!catalog) return;
-  const lst = sidereal(new Date(),site.lon);
+  const date = new Date();
+  const lst = sidereal(date,site.lon);
   const convert = ([ra,dec]) => horizontal(ra,dec,site.lat,lst);
   sky = {
+    moon:{id:'moon', zh:'月亮', en:'Moon', mag:-12, v:moonDirection(date,site.lat,lst)},
     stars:catalog.stars.map(star=>({...star,v:convert(star.eq)})).filter(star=>star.v[2]>=0),
     labels:catalog.labels.map(label=>({...label,v:convert(label.eq)})).filter(label=>label.v[2]>=0),
     paths:catalog.paths.map(path=>path.map(convert))
   };
+  sky.cameraStars = [...sky.stars.filter(star => star.en && star.mag <= 2.5), sky.moon];
+  if (mode === 'camera') updateReferences();
   schedule();
 }
 function draw() {
@@ -92,48 +104,62 @@ function draw() {
   }
   ctx.setTransform(dpr,0,0,dpr,0,0);
   const centerX=width/2, centerY=height/2;
-  const basis=mode==='sensor' && sensorView ? sensorView : view(az,alt);
-  const focal=Math.min(width,height)/2/Math.tan(fov*rad/2);
+  const camera = mode === 'camera';
+  ctx.clearRect(0,0,width,height);
+  if (camera && (!cameraFrame || (!cameraAbsolute && !cameraAlignment) || !video.videoWidth)) {
+    hitTargets = [];
+    byId('bearing').textContent = '將天體對準中央';
+    byId('zoom-label').textContent = '';
+    byId('target').textContent = cameraFrame ? '等待校正' : '等待方向資料';
+    drawCrosshair(centerX, centerY);
+    return;
+  }
+  const basis = camera ? (cameraAlignment ? cameraAlignment(cameraFrame) : cameraFrame)
+    : (mode === 'sensor' && sensorView ? sensorView : view(az,alt));
+  const focal = camera ? cameraFocal(width,height,video.videoWidth,video.videoHeight,Number(cameraFov.value))
+    : Math.min(width,height)/2/Math.tan(fov*rad/2);
   const project = v => {
     const depth=dot(v,basis.forward);
     if (depth<0.08) return null;
     return [centerX+dot(v,basis.right)*focal/depth,centerY-dot(v,basis.up)*focal/depth];
   };
   const inside = point => point && point[0]>0 && point[0]<width && point[1]>0 && point[1]<height;
-  const gradient=ctx.createRadialGradient(centerX,centerY,0,centerX,centerY,Math.hypot(width,height)*.55);
-  gradient.addColorStop(0,'#142440');
-  gradient.addColorStop(1,'#070b18');
-  ctx.fillStyle=gradient;
-  ctx.fillRect(0,0,width,height);
-  // The local horizon projects to a straight line in a perspective view.
-  const plane = ([x,y]) => basis.forward[2] + basis.right[2]*(x-centerX)/focal
-    - basis.up[2]*(y-centerY)/focal;
-  const corners=[[0,0],[width,0],[width,height],[0,height]];
-  const ground=[], horizon=[];
-  corners.forEach((corner,i) => {
-    const next=corners[(i+1)%4], a=plane(corner), b=plane(next);
-    if (a<=0) ground.push(corner);
-    if ((a<=0)!==(b<=0)) {
-      const t=a/(a-b);
-      const crossing=corner.map((value,j)=>value+(next[j]-value)*t);
-      ground.push(crossing);
-      horizon.push(crossing);
+  if (!camera) {
+    const gradient=ctx.createRadialGradient(centerX,centerY,0,centerX,centerY,Math.hypot(width,height)*.55);
+    gradient.addColorStop(0,'#142440');
+    gradient.addColorStop(1,'#070b18');
+    ctx.fillStyle=gradient;
+    ctx.fillRect(0,0,width,height);
+    // The local horizon projects to a straight line in a perspective view.
+    const plane = ([x,y]) => basis.forward[2] + basis.right[2]*(x-centerX)/focal
+      - basis.up[2]*(y-centerY)/focal;
+    const corners=[[0,0],[width,0],[width,height],[0,height]];
+    const ground=[], horizon=[];
+    corners.forEach((corner,i) => {
+      const next=corners[(i+1)%4], a=plane(corner), b=plane(next);
+      if (a<=0) ground.push(corner);
+      if ((a<=0)!==(b<=0)) {
+        const t=a/(a-b);
+        const crossing=corner.map((value,j)=>value+(next[j]-value)*t);
+        ground.push(crossing);
+        horizon.push(crossing);
+      }
+    });
+    if (ground.length) {
+      ctx.beginPath();
+      ctx.moveTo(...ground[0]);
+      ground.slice(1).forEach(point=>ctx.lineTo(...point));
+      ctx.closePath();
+      ctx.fillStyle='#101522';
+      ctx.fill();
     }
-  });
-  if (ground.length) {
-    ctx.beginPath();
-    ctx.moveTo(...ground[0]);
-    ground.slice(1).forEach(point=>ctx.lineTo(...point));
-    ctx.closePath();
-    ctx.fillStyle='#101522';
-    ctx.fill();
-  }
-  if (horizon.length===2) {
-    ctx.beginPath();
-    ctx.moveTo(...horizon[0]);
-    ctx.lineTo(...horizon[1]);
-    ctx.strokeStyle='#647794';
-    ctx.stroke();
+    if (horizon.length===2) {
+      ctx.beginPath();
+      ctx.moveTo(...horizon[0]);
+      ctx.lineTo(...horizon[1]);
+      ctx.strokeStyle='#647794';
+      ctx.stroke();
+    }
   }
   if (byId('lines').checked) {
     ctx.beginPath();
@@ -154,7 +180,9 @@ function draw() {
   hitTargets=[];
   let nearby, nearest=dot(basis.forward,basis.forward)*Math.cos(9*rad);
   ctx.fillStyle='#edf5ff';
-  for (const star of sky.stars) {
+  const stars = camera ? sky.cameraStars : sky.stars;
+  for (const star of stars) {
+    if (star.v[2] < 0) continue;
     const point=project(star.v);
     if (!inside(point)) continue;
     const radius=clamp(3.1-star.mag*.43,.6,4);
@@ -162,6 +190,16 @@ function draw() {
     ctx.beginPath();
     ctx.arc(...point,radius,0,Math.PI*2);
     ctx.fill();
+    if (camera) {
+      ctx.globalAlpha = 1;
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'bottom';
+      ctx.strokeStyle = '#080e1c';
+      ctx.lineWidth = 3;
+      ctx.strokeText(star.zh,point[0]+7,point[1]-4);
+      ctx.fillText(star.zh,point[0]+7,point[1]-4);
+    }
     if (star.en && star.mag<=3.1) {
       hitTargets.push({point,item:star,radius:14});
       const similarity=dot(star.v,basis.forward);
@@ -176,7 +214,7 @@ function draw() {
   ctx.strokeStyle='#0b1325';
   ctx.lineWidth=3;
   const labels=[];
-  for (const label of sky.labels) {
+  for (const label of camera ? [] : sky.labels) {
     const point=project(label.v);
     if (!inside(point)) continue;
     const half=ctx.measureText(label.zh).width/2;
@@ -190,6 +228,19 @@ function draw() {
     const similarity=dot(label.v,basis.forward);
     if (similarity>nearest && !nearby?.constellation) { nearest=similarity; nearby=label; }
   }
+  drawCrosshair(centerX,centerY);
+  const bearing=wrap(Math.round(azimuth(basis.forward)));
+  const elevation=degrees(Math.asin(clamp(basis.forward[2],-1,1)));
+  const compass=['北','東北','東','東南','南','西南','西','西北'];
+  byId('bearing').textContent=compass[Math.round(bearing/45)%8]+' '+bearing+'° · 仰角 '+Math.round(elevation)+'°';
+  byId('zoom-label').textContent=camera ? '鏡頭視角 '+cameraFov.value+'°' : '視野 '+fov+'°';
+  const item=selected || nearby;
+  const title=item ? [item.zh,selected && item.en!==item.zh ? item.en : '',item.constellation].filter(Boolean).join(' · ')
+    : elevation<0 ? '準星朝向地平線下方' : '準星附近未標出亮星或星座';
+  byId('target').textContent=title;
+}
+
+function drawCrosshair(centerX,centerY) {
   ctx.beginPath();
   ctx.moveTo(centerX-12,centerY); ctx.lineTo(centerX-4,centerY);
   ctx.moveTo(centerX+4,centerY); ctx.lineTo(centerX+12,centerY);
@@ -198,19 +249,14 @@ function draw() {
   ctx.strokeStyle='#d4e7ff';
   ctx.lineWidth=1.4;
   ctx.stroke();
-  const bearing=wrap(Math.round(azimuth(basis.forward)));
-  const elevation=degrees(Math.asin(clamp(basis.forward[2],-1,1)));
-  const compass=['北','東北','東','東南','南','西南','西','西北'];
-  byId('bearing').textContent=compass[Math.round(bearing/45)%8]+' '+bearing+'° · 仰角 '+Math.round(elevation)+'°';
-  byId('zoom-label').textContent='視野 '+fov+'°';
-  const item=selected || nearby;
-  const title=item ? [item.zh,selected && item.en!==item.zh ? item.en : '',item.constellation].filter(Boolean).join(' · ')
-    : elevation<0 ? '準星朝向地平線下方' : '準星附近未標出亮星或星座';
-  byId('target').textContent=title;
 }
 
 function setMode(next) {
+  if (next !== 'camera') stopCamera();
   mode=next;
+  byId('camera').setAttribute('aria-pressed', String(mode === 'camera'));
+  byId('camera-controls').hidden = mode !== 'camera';
+  byId('chart-zoom').hidden = mode === 'camera';
   byId('manual').setAttribute('aria-pressed',String(mode==='manual'));
   byId('sensor').setAttribute('aria-pressed',String(mode==='sensor'));
   selected=undefined;
@@ -228,42 +274,147 @@ function manual(message='拖曳星圖移動，點選亮星或星座名稱查看�
   status(message);
 }
 byId('manual').addEventListener('click',()=>manual());
-byId('sensor').addEventListener('click',async () => {
-  const Event=window.DeviceOrientationEvent;
-  if (mode==='sensor') return;
-  if (!Event || !isSecureContext) {
-    manual('手機指向需要支援方向感測的瀏覽器與 HTTPS。');
+function stopCamera() {
+  video.srcObject?.getTracks().forEach(track => track.stop());
+  video.srcObject = null;
+  video.hidden = true;
+  cameraFrame = cameraAlignment = undefined;
+  cameraAbsolute = false;
+}
+
+async function requestOrientation(Event) {
+  if (typeof Event.requestPermission !== 'function') return true;
+  return await Event.requestPermission(true) === 'granted';
+}
+
+async function openSensorMode(next) {
+  if (mode === next) {
+    if (next === 'camera') manual();
     return;
   }
-  const request=++sensorRequest;
+  const Event = window.DeviceOrientationEvent;
+  if (!Event || !isSecureContext) {
+    manual('手機指向與相機觀星需要支援方向感測的瀏覽器與 HTTPS。');
+    return;
+  }
+  if (next === 'camera' && !navigator.mediaDevices?.getUserMedia) {
+    manual('這個瀏覽器無法開啟相機。可以使用手機指向或手動星圖。');
+    return;
+  }
+  manual('正在取得手機權限…');
+  const request = sensorRequest;
   try {
-    if (typeof Event.requestPermission==='function' && await Event.requestPermission(true)!=='granted') {
-      if (request===sensorRequest) manual('方向感測未授權。仍可使用手動星圖。');
+    // Both requests start from the same user gesture, including on iOS.
+    const direction = requestOrientation(Event).catch(() => false);
+    const stream = next === 'camera' ? await navigator.mediaDevices.getUserMedia({
+      video:{facingMode:{ideal:'environment'}}, audio:false
+    }) : null;
+    if (request !== sensorRequest) {
+      stream?.getTracks().forEach(track => track.stop());
       return;
     }
+    if (stream) video.srcObject = stream;
+    const granted = await direction;
+    if (request !== sensorRequest) return;
+    if (!granted) {
+      manual('方向感測未授權。可以使用手動星圖。');
+      return;
+    }
+    if (stream) {
+      await video.play();
+      if (request !== sensorRequest) return;
+      video.hidden = false;
+      stream.getVideoTracks()[0]?.addEventListener('ended', () => {
+        if (request === sensorRequest) manual('相機畫面已中斷。');
+      });
+    }
+    sensorPriority = -1;
+    setMode(next);
+    if (next === 'camera') updateReferences();
+    status('正在等待手機提供方向資料…');
+    sensorTimer = setTimeout(() => manual('手機未提供可用的方向資料。已切回手動星圖。'),4500);
   } catch {
-    if (request===sensorRequest) manual('無法取得方向感測權限。仍可使用手動星圖。');
+    if (request === sensorRequest) manual('無法開啟相機。請確認相機權限，或切換至手機指向。');
+  }
+}
+byId('sensor').addEventListener('click', () => openSensorMode('sensor'));
+byId('camera').addEventListener('click', () => openSensorMode('camera'));
+window.addEventListener('pagehide', () => manual());
+
+function updateReferences() {
+  if (!sky) return;
+  const previous = reference.value;
+  const choices = [sky.moon, ...sky.cameraStars.filter(star => star.id !== 'moon' && star.mag <= 1.6)]
+    .filter(item => item.v[2] > 0);
+  const values = choices.map(item => String(item.id));
+  if (reference.options.length !== choices.length
+    || values.some((value,i) => reference.options[i].value !== value)) {
+    reference.replaceChildren(...choices.map(item => new Option(item.zh,item.id)));
+    reference.value = values.includes(previous) ? previous : (values[0] ?? '');
+  }
+  reference.disabled = !choices.length;
+  align.disabled = !cameraFrame || !choices.length;
+}
+function announceCamera() {
+  status(cameraAlignment ? '已校正。轉動手機可查看附近天體。'
+    : cameraAbsolute ? '相機已啟用。對準月亮或亮星可校正位置。'
+    : '手機只提供相對方向。請先用月亮或亮星校正。');
+}
+align.addEventListener('click', () => {
+  if (!cameraFrame || !catalog) return;
+  const date = new Date();
+  const lst = sidereal(date,site.lon);
+  const star = catalog.stars.find(item => String(item.id) === reference.value);
+  const target = reference.value === 'moon' ? moonDirection(date,site.lat,lst)
+    : star && horizontal(...star.eq,site.lat,lst);
+  if (!target || target[2] <= 0) {
+    updateSky();
+    status('這顆天體目前在地平線下，請選另一顆。');
     return;
   }
-  if (request!==sensorRequest) return;
-  setMode('sensor');
-  status('正在等待手機提供方向資料…');
-  sensorTimer=setTimeout(()=>manual('手機未提供可用的絕對方位。請改用手動星圖。'),3500);
+  cameraAlignment = alignCamera(cameraFrame.forward,target);
+  selected = undefined;
+  announceCamera();
+  schedule();
 });
+byId('camera-reset').addEventListener('click', () => {
+  cameraAlignment = undefined;
+  selected = undefined;
+  if (cameraFrame) announceCamera();
+  schedule();
+});
+cameraFov.addEventListener('input', () => {
+  byId('camera-fov-label').value = cameraFov.value + '°';
+  schedule();
+});
+video.addEventListener('resize',schedule);
+
 function readSensor(event) {
-  if (mode!=='sensor') return;
-  const {alpha,beta,gamma,absolute,webkitCompassHeading,webkitCompassAccuracy}=event;
-  const apple=Number.isFinite(webkitCompassHeading) && webkitCompassHeading>=0
-    && (!Number.isFinite(webkitCompassAccuracy) || webkitCompassAccuracy>=0);
-  if (!absolute && !apple) return;
-  const heading=apple?-webkitCompassHeading:alpha;
+  if (mode === 'manual') return;
+  const {alpha,beta,gamma,absolute,webkitCompassHeading,webkitCompassAccuracy} = event;
+  const apple = Number.isFinite(webkitCompassHeading) && webkitCompassHeading >= 0
+    && (!Number.isFinite(webkitCompassAccuracy) || webkitCompassAccuracy >= 0);
+  const priority = apple ? 3 : event.type === 'deviceorientationabsolute' || absolute ? 1 : 0;
+  if (mode === 'camera' ? priority < sensorPriority : !priority) return;
+  const heading = apple ? -webkitCompassHeading : alpha;
   if (![heading,beta,gamma].every(Number.isFinite)) return;
-  const screenAngle=screen.orientation?.angle ?? window.orientation ?? 0;
-  const next=orientation(heading-Number(byId('offset').value),beta,gamma,screenAngle);
-  if (!sensorView) status('手機指向已啟用。若有偏移，可以微調方位校準。');
-  sensorView=next;
+  const screenAngle = screen.orientation?.angle ?? window.orientation ?? 0;
+  if (mode === 'camera') {
+    const announce = !cameraFrame || priority > sensorPriority;
+    if (sensorPriority >= 0 && priority > sensorPriority) cameraAlignment = undefined;
+    cameraFrame = orientation(heading,beta,gamma,screenAngle);
+    cameraAbsolute = priority > 0;
+    if (announce) {
+      updateReferences();
+      announceCamera();
+    }
+  } else {
+    if (!sensorView) status('手機指向已啟用。若有偏移，可以微調方位校準。');
+    sensorView = orientation(heading-Number(byId('offset').value),beta,gamma,screenAngle);
+  }
+  sensorPriority = priority;
   clearTimeout(sensorTimer);
-  sensorTimer=setTimeout(()=>manual('方向資料已中斷。已切回手動星圖。'),4500);
+  sensorTimer = setTimeout(() => manual('方向資料已中斷。已切回手動星圖。'),4500);
   schedule();
 }
 window.addEventListener('deviceorientationabsolute',readSensor);
@@ -315,6 +466,7 @@ chart.addEventListener('pointerup',event => {
 chart.addEventListener('lostpointercapture',()=>{drag=undefined;});
 chart.addEventListener('keydown',event => {
   const directions={ArrowUp:[0,5],ArrowDown:[0,-5],ArrowLeft:[-5,0],ArrowRight:[5,0]};
+  if (mode === 'camera') return;
   if (event.key==='+' || event.key==='=') changeZoom(-8);
   else if (event.key==='-') changeZoom(8);
   else if (mode==='manual' && directions[event.key]) {
@@ -343,7 +495,7 @@ try {
   catalog={
     stars:stars.features.map(({id,geometry,properties})=>{
       const entry=names[id];
-      return {eq:geometry.coordinates,mag:properties.mag,en:entry?.name,
+      return {id,eq:geometry.coordinates,mag:properties.mag,en:entry?.name,
         zh:starTranslations[id] || entry?.name,constellation:constellationNames.get(entry?.c)};
     }),
     labels:labels.features.map(({geometry,properties})=>({
